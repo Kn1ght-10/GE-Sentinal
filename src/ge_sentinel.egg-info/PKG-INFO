@@ -1,0 +1,150 @@
+Metadata-Version: 2.4
+Name: ge-sentinel
+Version: 0.1.0
+Summary: Market-manipulation & RMT anomaly detection for the OSRS Grand Exchange
+Author: Pranav Tiwari
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: pandas>=2.0
+Requires-Dist: numpy>=1.26
+Requires-Dist: scikit-learn>=1.4
+Requires-Dist: SQLAlchemy>=2.0
+Requires-Dist: httpx>=0.27
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: matplotlib>=3.8
+Provides-Extra: serve
+Requires-Dist: fastapi>=0.110; extra == "serve"
+Requires-Dist: uvicorn>=0.29; extra == "serve"
+Requires-Dist: streamlit>=1.33; extra == "serve"
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: ruff>=0.4; extra == "dev"
+Requires-Dist: pre-commit>=3.7; extra == "dev"
+Dynamic: license-file
+
+# GE-Sentinel
+
+**Market-manipulation & RMT surveillance for the Old School RuneScape Grand Exchange** — an end-to-end anomaly-detection system over a real exchange's 5-minute price feed: ingestion → storage → features → weak supervision → 5-detector ensemble → walk-forward evaluation → alert queue → retrieval-grounded analyst memos → API + dashboard.
+
+The Grand Exchange is a genuine electronic marketplace (~3,700 instruments, real order flow, public 5-minute data) that suffers real financial-crime analogues: coordinated pump-and-dumps by "merch clans" and real-money-trading (RMT) value transfers disguised as trades. Jagex bans both sides of RMT; the OSRS Wiki's own API FAQ notes that suspected RMT shows up as **low-volume items trading at extraordinary prices** — which is exactly the signature this system hunts.
+
+![Injected pump & dump, detected with zero delay](assets/fig_event_anatomy.png)
+
+## Measured results
+
+Validation on **synthetic injected events** in a 30% held-out time window (40 items × 21 days = 241,920 five-minute records + 95 genuine API records). Models never see ground truth — they train on weak labels only; truth exists solely for scoring. Full protocol below.
+
+| Metric | Value |
+|---|---|
+| precision@5 / @10 | **1.00 / 1.00** |
+| precision@15 / @25 | 0.87 / 0.68 † |
+| Event recall (10 injected manipulation events) | **1.00** |
+| Row-level AUC | **0.93** |
+| Median detection delay | **0 minutes** (alert fires in the event's first 5-min bucket) |
+| Benign patch-shock false alarms in top-25 | **0** |
+| Alert volume | 6.5 episodes/day across 40 items |
+| End-to-end runtime (242k rows, full pipeline) | ~11 s |
+
+† precision@25 has a hard ceiling of 0.68 here: only 10 events exist in the test window, yielding 17 matchable alert episodes. The precision *curve* is the honest view; an analyst reviewing the top 10 alerts would have hit nothing but true manipulation.
+
+Generalization check: re-running the identical pipeline on an unseen simulator seed gives precision@5/@10 = 1.00/1.00, precision@25 = 0.64 — no seed-specific tuning.
+
+![Evaluation summary](assets/fig_eval_summary.png)
+
+## What's real vs. synthetic (read this)
+
+Honesty is a design constraint here, not a disclaimer:
+
+- **Real**: the ingestion layer speaks to the live [OSRS Wiki Real-time Prices API](https://prices.runescape.wiki/api/v1/osrs) (with the mandatory descriptive User-Agent); the repo ships a committed excerpt of **genuine API data** (95 five-minute records for Abyssal whip, including one genuine missing bucket that the gap-report surfaces rather than papering over). Real rows are tagged `seed_real`/`live` in the DB.
+- **Synthetic**: detection metrics require ground truth, and no public dataset labels GE manipulation. So evaluation runs on a calibrated simulator (mean-reverting log-price + seasonal Poisson volume) with **injected, labeled events**: pump-and-dumps (ramp + retrace on 8–20× volume), RMT spikes (1–3 buckets at 8–18× median price on ≤3 units), and *benign* patch shocks (permanent level shifts — the look-alike the system must NOT flag). Synthetic rows are tagged `source="synth"`.
+- **Never crossed**: models see weak labels only; truth labels touch nothing but the evaluator. Real items are scored but excluded from metrics (no truth exists for them). Every reported number is therefore "validation on synthetic injected events" — a detection-capability claim, not a claim about live-market prevalence.
+
+![Real API data with a genuine gap](assets/fig_real_whip.png)
+
+## Architecture
+
+```
+OSRS Wiki API ──collector──▶ SQLite/Postgres(Timescale) ──▶ features (robust rolling
+ (live, UA req'd)  (cron/Prefect)  items·prices_5m·alerts      median/MAD z-scores)
+                                                                      │
+        synthetic market w/ injected truth ──────────────────────────┤
+                                                                      ▼
+   weak labels (labeling functions, no hand labels) ──▶ 5-detector ensemble
+     lf_pump · lf_rmt · lf_quiet · lf_patch              rules │ stats │ IsolationForest
+                                                         seasonal-naive forecast residual
+                                                         weak-label GBM (re-ranker only)
+                                                                      ▼
+   walk-forward eval (truth never trains) ◀── episodes ──▶ alerts table ──▶ FastAPI
+   precision curve · recall · delay · AUC                      │            Streamlit
+                                                               ▼
+                                            TF-IDF RAG over domain corpus ──▶ analyst
+                                            memos (optional Claude polish)     memos
+```
+
+Detector design notes that actually mattered:
+
+1. **Robust z-scores with denominator floors.** Illiquid items have long runs of zero volume/identical prices, collapsing the MAD to 0 and turning any tick into an "infinite" anomaly — the classic illiquid-surveillance false-positive source. Denominator = max(MAD, 0.5·rolling σ, absolute floor).
+2. **The supervised model is a re-ranker, not a gate.** The weak-label GBM's probabilities saturate (257 noise episodes all scoring exactly at the ceiling in the first full run — zero ranking power). It now multiplies the unsupervised ensemble by 0.75–1.25× and can never originate an alert alone. Alert volume fell 46 → 6.5/day; recall stayed 1.00.
+3. **Median-filtered seasonal baseline.** A seasonal-naive forecaster using raw lag-288 echoes any 1-bucket spike exactly one day later (phantom alerts at +288 buckets after every RMT print — visible in the diagnostics, ranks 6–10). The daily-lag reference is now a 13-bucket centered median: wide enough to outvote a spike plus its forward-fill smear (≤9 buckets), narrow enough that genuine multi-hour pumps (≥18 buckets) pass through.
+4. **Patch suppression + negative labeling.** Announced update windows damp scores ×0.3 and vote negative in weak labeling — that's why benign patch shocks produce zero top-25 false alarms while remaining visible in the alert tail.
+
+## Quickstart
+
+```bash
+git clone <your-fork> && cd ge-sentinel
+make install          # pip install -e ".[serve,dev]"
+make demo             # full offline run: ~11 s, no network needed
+make test             # pytest: unit + end-to-end + API (7 tests)
+make api              # http://localhost:8000/docs
+make dashboard        # http://localhost:8501
+# or: docker compose up demo api dashboard
+```
+
+The demo prints the eval summary and writes `data/outputs/eval_report.json`, five analyst memos under `data/outputs/memos/`, and the four figures under `assets/`.
+
+### Going live (your machine; the API blocks anonymous clients)
+
+```bash
+cp .env.example .env                 # set GE_SENTINEL_UA to "ge-sentinel - you@example.com"
+python -m ge_sentinel.cli collect --sync-mapping        # one full-market sweep (~3,700 items)
+python -m ge_sentinel.cli collect --loop 12             # an hour of 5-min sweeps
+python -m ge_sentinel.cli backfill 4151 561 --timesteps 5m,1h
+python -m ge_sentinel.cli gaps 4151
+python scripts/fetch_real_seed.py                       # refresh the committed real excerpts
+```
+
+`.github/workflows/collect.yml` runs the collector on a cron against a hosted Postgres (set `GE_SENTINEL_UA` and `GE_SENTINEL_DB` repo secrets); `db/migrations/001_timescale.sql` is the production TimescaleDB schema; `flows/prefect_flow.py` is the step-up orchestration with retries.
+
+### Analyst memos
+
+Each top alert gets a markdown memo: window, ensemble score, primary signal, hypothesis (pump/RMT/patch), peak evidence, a counterfactual impact estimate, *plausible benign explanations checked*, and paragraphs retrieved from a small domain corpus (RMT mechanics, merch-clan behavior, patch repricing, enforcement waves, and a research note on the 2019 Venezuela-blackout natural experiment). With `ANTHROPIC_API_KEY` set, memos get an LLM polish; without it they're a deterministic template — the pipeline never requires a key.
+
+### Causal module
+
+`causal.event_study` runs a treated-vs-control event study with bootstrap CIs (demoed on a known benign patch shock: +3.3%, 95% CI [−8.1, +12.8] — correctly indistinguishable from zero for a placebo-style check). The intended headline analysis: backfill daily history around **March 2019** from Weirdgloop's bulk archives and test whether the Venezuela blackouts (which press coverage tied to a large share of gold-farming supply) produced abnormal returns in farmable commodities vs. a control basket.
+
+## Repo map
+
+```
+src/ge_sentinel/      config · db · api_client · ingest · synthetic · features ·
+                      labeling · detectors · evaluate · causal · memo · pipeline · cli
+api/main.py           FastAPI: /health /alerts /items/{id}/prices /report /memos
+dashboard/app.py      Streamlit: metrics, alert-overlay charts, memo viewer, gap panel
+tests/                unit + end-to-end (metric floors) + API smoke (7 tests, ~14 s)
+data/seed/real/       committed genuine API excerpt (tagged seed_real)
+data/corpus/          sample RAG corpus for memos
+.github/workflows/    ci.yml (ruff+pytest) · collect.yml (scheduled live collection)
+db/migrations/        TimescaleDB production schema
+```
+
+## Resume bullets this project backs up
+
+- Built an end-to-end market-surveillance system (Python, SQLAlchemy, FastAPI, Streamlit) for a live exchange's 5-minute feed; a 5-detector ensemble over weak-supervision labels reached **precision@10 = 1.00, event recall = 1.00, AUC = 0.93 with 0-minute median detection delay and zero benign-event false alarms** on held-out injected manipulation events (242k records, 11 s end-to-end).
+- Diagnosed and fixed three production-grade failure modes — zero-MAD blowups on illiquid series, a saturated classifier gating alerts, and a seasonal forecaster echoing spikes one day later — **cutting alert volume 86% (46 → 6.5/day) at unchanged 1.00 recall**, verified on an unseen simulator seed.
+- Designed an honest evaluation protocol (injected ground truth, time-based split, truth isolated from training, real API data tagged and excluded from metrics) plus a bootstrap event-study module for natural-experiment analysis of a 2019 supply shock.
+
+## License
+
+MIT © 2026 Pranav Tiwari. Not affiliated with Jagex or the OSRS Wiki; respect the API's [acceptable-use policy](https://prices.runescape.wiki/) — descriptive User-Agent, no hammering.

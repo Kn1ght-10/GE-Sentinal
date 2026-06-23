@@ -1,0 +1,18 @@
+{
+  "item_id": 900013,
+  "ts_start": 1772401500,
+  "ts_end": 1772402100,
+  "peak_ts": 1772401500,
+  "score": 21.04320184963874,
+  "top_detector": "forecast",
+  "kind_guess": "rmt_spike",
+  "evidence": {
+    "vol_z_peak": 0.0,
+    "ret6_peak": 2.7713452992063647,
+    "px_ratio_peak": 15.759061763742883,
+    "spread_z_peak": 1.4568204069805808,
+    "near_update": false,
+    "impact_note": "~12,741,529 gp turnover during a +1538.7% peak excursion (+5.0% net over the window) versus the pre-episode price."
+  },
+  "generated_ts": 1781459945
+}

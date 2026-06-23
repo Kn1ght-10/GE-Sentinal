@@ -1,0 +1,38 @@
+{
+  "k": 25,
+  "n_test_episodes": 41,
+  "precision_at_k": 0.68,
+  "precision_curve": {
+    "5": 1.0,
+    "10": 1.0,
+    "15": 0.8667,
+    "25": 0.68
+  },
+  "recall_manip_events": 1.0,
+  "n_manip_events_test": 10,
+  "median_detection_delay_min": 0.0,
+  "patch_false_alarms_in_topk": 0,
+  "row_level_auc": 0.925,
+  "alerts_per_day_test": 6.51,
+  "runtime_s": 12.4,
+  "fast_mode": false,
+  "split_ts": 1772469900,
+  "rows_total": 242015,
+  "rows_real_seed": 95,
+  "items_synth": 40,
+  "real_whip_missing_buckets": 1,
+  "n_alerts_recorded": 50,
+  "n_memos": 5,
+  "showcase_item": 900021,
+  "causal_patch_event_study": {
+    "event_ts": 1771515900,
+    "n_treated": 5,
+    "n_control": 8,
+    "avg_abnormal_post_pct": 3.3,
+    "ci95_pct": [
+      -8.12,
+      12.78
+    ]
+  },
+  "validation_data": "synthetic injected events (models trained on weak labels only)"
+}

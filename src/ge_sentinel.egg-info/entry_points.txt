@@ -1,0 +1,2 @@
+[console_scripts]
+ge-sentinel = ge_sentinel.cli:main

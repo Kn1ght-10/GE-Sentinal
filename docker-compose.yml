@@ -1,0 +1,19 @@
+services:
+  demo:
+    build: .
+    command: python -m ge_sentinel.cli demo
+    volumes:
+      - ./data:/app/data
+      - ./assets:/app/assets
+  api:
+    build: .
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+    volumes:
+      - ./data:/app/data
+  dashboard:
+    build: .
+    command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+    ports: ["8501:8501"]
+    volumes:
+      - ./data:/app/data

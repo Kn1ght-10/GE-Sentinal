@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ge-sentinel"
+version = "0.1.0"
+description = "Market-manipulation & RMT anomaly detection for the OSRS Grand Exchange"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Pranav Tiwari"}]
+dependencies = [
+  "pandas>=2.0",
+  "numpy>=1.26",
+  "scikit-learn>=1.4",
+  "SQLAlchemy>=2.0",
+  "httpx>=0.27",
+  "pyyaml>=6.0",
+  "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+serve = ["fastapi>=0.110", "uvicorn>=0.29", "streamlit>=1.33"]
+dev = ["pytest>=8", "ruff>=0.4", "pre-commit>=3.7"]
+
+[project.scripts]
+ge-sentinel = "ge_sentinel.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
